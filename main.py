@@ -88,7 +88,7 @@ class LinuxDoBrowser:
         else:
             platformIdentifier = "X11; Linux x86_64"
 
-        # 优化：添加隐藏自动化特征的配置
+        # 修复：DrissionPage 正确的参数设置方式
         co = (
             ChromiumOptions()
             .headless(True)
@@ -97,13 +97,14 @@ class LinuxDoBrowser:
             .set_argument("--disable-blink-features=AutomationControlled")  # 隐藏自动化标识
             .set_argument("--disable-extensions")  # 禁用扩展
             .set_argument("--disable-dev-shm-usage")  # 解决内存不足问题
+            # DrissionPage 设置 excludeSwitches 的正确方式
+            .set_argument("--exclude-switches=enable-automation")
+            # 禁用自动化扩展的正确参数
+            .set_argument("--disable-automation")
         )
         # 随机选择User-Agent
         random_ua = random.choice(USER_AGENTS)
         co.set_user_agent(random_ua)
-        # 禁用自动化扩展
-        co.set_experimental_option("excludeSwitches", ["enable-automation"])
-        co.set_experimental_option("useAutomationExtension", False)
         
         self.browser = Chromium(co)
         self.page = self.browser.new_tab()
@@ -301,15 +302,21 @@ class LinuxDoBrowser:
             login_res = self.login()
             if not login_res:
                 logger.warning("登录验证失败")
+                self.send_notifications(False)  # 登录失败也发送通知
+                return
 
             if BROWSE_ENABLED:
                 click_topic_res = self.click_topic()
                 if not click_topic_res:
                     logger.error("点击主题失败，程序终止")
+                    self.send_notifications(False)
                     return
                 logger.info("完成浏览任务")
 
             self.send_notifications(BROWSE_ENABLED)
+        except Exception as e:
+            logger.error(f"程序执行异常: {str(e)}")
+            self.send_notifications(False)
         finally:
             try:
                 self.page.close()
@@ -362,9 +369,10 @@ class LinuxDoBrowser:
 
     def send_notifications(self, browse_enabled):
         """发送签到通知"""
-        status_msg = f"✅每日登录成功: {USERNAME}"
         if browse_enabled:
-            status_msg += " + 浏览任务完成"
+            status_msg = f"✅每日登录成功: {USERNAME} + 浏览任务完成"
+        else:
+            status_msg = f"❌执行失败: {USERNAME} (登录失败或浏览任务未完成)"
         
         self.notifier.send_all("LINUX DO", status_msg)
 
