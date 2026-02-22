@@ -42,7 +42,7 @@ def retry_decorator(retries=3, min_delay=5, max_delay=10):
 
 # 测试版：仅延迟10秒（取消原0-3600秒延迟）
 logger.info("测试模式：延迟10秒后开始执行...")
-time.sleep(10)  # 固定延迟10秒，方便测试
+time.sleep(random.randint(10, 60)) # 固定延迟10秒，方便测试
 
 # 清理环境变量
 os.environ.pop("DISPLAY", None)
