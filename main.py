@@ -1,5 +1,5 @@
 """
-cron: 0 */6 * * *
+cron: 0 2-6 * * *  # 优化为每天2-6点随机执行一次，降低频率
 new Env("Linux.Do 签到")
 """
 
@@ -41,6 +41,10 @@ def retry_decorator(retries=3, min_delay=5, max_delay=10):
     return decorator
 
 
+# 启动时随机延迟0-1小时，避免固定时间执行
+logger.info("随机延迟0-3600秒后开始执行...")
+time.sleep(random.randint(0, 20))
+
 os.environ.pop("DISPLAY", None)
 os.environ.pop("DYLD_LIBRARY_PATH", None)
 
@@ -61,6 +65,15 @@ LOGIN_URL = "https://linux.do/login"
 SESSION_URL = "https://linux.do/session"
 CSRF_URL = "https://linux.do/session/csrf"
 
+# 新增：随机User-Agent列表，模拟不同浏览器/设备
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/129.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+]
+
 
 class LinuxDoBrowser:
     def __init__(self) -> None:
@@ -75,34 +88,41 @@ class LinuxDoBrowser:
         else:
             platformIdentifier = "X11; Linux x86_64"
 
+        # 优化：添加隐藏自动化特征的配置
         co = (
             ChromiumOptions()
             .headless(True)
             .incognito(True)
             .set_argument("--no-sandbox")
+            .set_argument("--disable-blink-features=AutomationControlled")  # 隐藏自动化标识
+            .set_argument("--disable-extensions")  # 禁用扩展
+            .set_argument("--disable-dev-shm-usage")  # 解决内存不足问题
         )
-        co.set_user_agent(
-            f"Mozilla/5.0 ({platformIdentifier}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-        )
+        # 随机选择User-Agent
+        random_ua = random.choice(USER_AGENTS)
+        co.set_user_agent(random_ua)
+        # 禁用自动化扩展
+        co.set_experimental_option("excludeSwitches", ["enable-automation"])
+        co.set_experimental_option("useAutomationExtension", False)
+        
         self.browser = Chromium(co)
         self.page = self.browser.new_tab()
         self.session = requests.Session()
+        # 优化：会话也使用随机User-Agent
         self.session.headers.update(
             {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0",
+                "User-Agent": random_ua,
                 "Accept": "application/json, text/javascript, */*; q=0.01",
                 "Accept-Language": "zh-CN,zh;q=0.9",
             }
         )
-        # 初始化通知管理器
         self.notifier = NotificationManager()
 
     def login(self):
         logger.info("开始登录")
-        # Step 1: Get CSRF Token
         logger.info("获取 CSRF token...")
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0",
+            "User-Agent": random.choice(USER_AGENTS),  # 随机UA
             "Accept": "application/json, text/javascript, */*; q=0.01",
             "Accept-Language": "zh-CN,zh;q=0.9",
             "X-Requested-With": "XMLHttpRequest",
@@ -116,7 +136,6 @@ class LinuxDoBrowser:
         csrf_token = csrf_data.get("csrf")
         logger.info(f"CSRF Token obtained: {csrf_token[:10]}...")
 
-        # Step 2: Login
         logger.info("正在登录...")
         headers.update(
             {
@@ -152,19 +171,9 @@ class LinuxDoBrowser:
             logger.error(f"登录请求异常: {e}")
             return False
 
-        self.print_connect_info()  # 打印连接信息
+        self.print_connect_info()
 
-        # Step 3: Pass cookies to DrissionPage
         logger.info("同步 Cookie 到 DrissionPage...")
-
-        # Convert requests cookies to DrissionPage format
-        # Using standard requests.utils to parse cookiejar if possible, or manual extraction
-        # requests.Session().cookies is a specialized object, but might support standard iteration
-
-        # We can iterate over the cookies manually if dict_from_cookiejar doesn't work perfectly
-        # or convert to dict first.
-        # Assuming requests behaves like requests:
-
         cookies_dict = self.session.cookies.get_dict()
 
         dp_cookies = []
@@ -183,14 +192,15 @@ class LinuxDoBrowser:
         logger.info("Cookie 设置完成，导航至 linux.do...")
         self.page.get(HOME_URL)
 
-        time.sleep(5)
+        # 优化：登录后随机延迟，模拟真人等待页面加载
+        time.sleep(random.uniform(3, 6))
+        
         try:
             user_ele = self.page.ele("@id=current-user")
         except Exception as e:
             logger.warning(f"登录验证失败: {str(e)}")
             return True
         if not user_ele:
-            # Fallback check for avatar
             if "avatar" in self.page.html:
                 logger.info("登录验证成功 (通过 avatar)")
                 return True
@@ -205,18 +215,33 @@ class LinuxDoBrowser:
         if not topic_list:
             logger.error("未找到主题帖")
             return False
-        logger.info(f"发现 {len(topic_list)} 个主题帖，随机选择10个")
-        for topic in random.sample(topic_list, 10):
+        
+        # 优化：随机浏览8-15个帖子，避免固定数量
+        browse_count = random.randint(8, 15)
+        # 防止帖子数量不足导致报错
+        browse_count = min(browse_count, len(topic_list))
+        logger.info(f"发现 {len(topic_list)} 个主题帖，随机选择{browse_count}个")
+        
+        for topic in random.sample(topic_list, browse_count):
             self.click_one_topic(topic.attr("href"))
         return True
 
     @retry_decorator()
     def click_one_topic(self, topic_url):
+        # 优化：模拟真人点击前的犹豫
+        click_delay = random.uniform(0.5, 2)
+        logger.info(f"模拟真人犹豫 {click_delay:.2f} 秒后点击帖子")
+        time.sleep(click_delay)
+        
         new_page = self.browser.new_tab()
         try:
             new_page.get(topic_url)
-            if random.random() < 0.3:  # 0.3 * 30 = 9
+            
+            # 优化：随机点赞概率（10%-25%）
+            like_prob = random.uniform(0.1, 0.25)
+            if random.random() < like_prob:
                 self.click_like(new_page)
+                
             self.browse_post(new_page)
         finally:
             try:
@@ -226,19 +251,32 @@ class LinuxDoBrowser:
 
     def browse_post(self, page):
         prev_url = None
-        # 开始自动滚动，最多滚动10次
-        for _ in range(10):
-            # 随机滚动一段距离
-            scroll_distance = random.randint(550, 650)  # 随机滚动 550-650 像素
-            logger.info(f"向下滚动 {scroll_distance} 像素...")
-            page.run_js(f"window.scrollBy(0, {scroll_distance})")
+        # 优化：每个帖子滚动次数随机（3-8次），而非固定10次
+        scroll_times = random.randint(3, 8)
+        logger.info(f"当前帖子计划滚动 {scroll_times} 次")
+        
+        for _ in range(scroll_times):
+            # 优化：随机滚动距离，模拟真人不规律滚动
+            scroll_distance = random.choice([
+                random.randint(200, 400),  # 小幅滚动
+                random.randint(500, 700),  # 中等滚动
+                random.randint(800, 1000), # 大幅滚动
+                0  # 偶尔不滚动（模拟停留）
+            ])
+            
+            if scroll_distance > 0:
+                logger.info(f"向下滚动 {scroll_distance} 像素...")
+                page.run_js(f"window.scrollBy(0, {scroll_distance})")
+            else:
+                logger.info("模拟真人停留，本次不滚动")
+            
             logger.info(f"已加载页面: {page.url}")
 
-            if random.random() < 0.03:  # 33 * 4 = 132
-                logger.success("随机退出浏览")
+            # 优化：8%概率模拟分心退出
+            if random.random() < 0.08:
+                logger.success("模拟真人分心，退出当前帖子浏览")
                 break
 
-            # 检查是否到达页面底部
             at_bottom = page.run_js(
                 "window.scrollY + window.innerHeight >= document.body.scrollHeight"
             )
@@ -249,25 +287,29 @@ class LinuxDoBrowser:
                 logger.success("已到达页面底部，退出浏览")
                 break
 
-            # 动态随机等待
-            wait_time = random.uniform(2, 4)  # 随机等待 2-4 秒
+            # 优化：随机等待时间，包含长短等待
+            wait_time = random.choice([
+                random.uniform(1, 3),   # 短等待
+                random.uniform(3, 6),   # 中等等待
+                random.uniform(8, 12)   # 偶尔长等待（模拟思考）
+            ])
             logger.info(f"等待 {wait_time:.2f} 秒...")
             time.sleep(wait_time)
 
     def run(self):
         try:
             login_res = self.login()
-            if not login_res:  # 登录
+            if not login_res:
                 logger.warning("登录验证失败")
 
             if BROWSE_ENABLED:
-                click_topic_res = self.click_topic()  # 点击主题
+                click_topic_res = self.click_topic()
                 if not click_topic_res:
                     logger.error("点击主题失败，程序终止")
                     return
                 logger.info("完成浏览任务")
 
-            self.send_notifications(BROWSE_ENABLED)  # 发送通知
+            self.send_notifications(BROWSE_ENABLED)
         finally:
             try:
                 self.page.close()
@@ -280,10 +322,12 @@ class LinuxDoBrowser:
 
     def click_like(self, page):
         try:
-            # 专门查找未点赞的按钮
             like_button = page.ele(".discourse-reactions-reaction-button")
             if like_button:
                 logger.info("找到未点赞的帖子，准备点赞")
+                # 优化：点赞前随机延迟，模拟真人操作
+                like_delay = random.uniform(0.3, 1.2)
+                time.sleep(like_delay)
                 like_button.click()
                 logger.info("点赞成功")
                 time.sleep(random.uniform(1, 2))
@@ -296,6 +340,7 @@ class LinuxDoBrowser:
         logger.info("获取连接信息")
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "User-Agent": random.choice(USER_AGENTS),  # 随机UA
         }
         resp = self.session.get(
             "https://connect.linux.do/", headers=headers, impersonate="chrome136"
@@ -321,7 +366,6 @@ class LinuxDoBrowser:
         if browse_enabled:
             status_msg += " + 浏览任务完成"
         
-        # 使用通知管理器发送所有通知
         self.notifier.send_all("LINUX DO", status_msg)
 
 
